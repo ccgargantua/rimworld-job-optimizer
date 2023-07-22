@@ -163,3 +163,4 @@ cython_debug/
 # Custom
 test_save.rws
 test_colony.json
+optimized_jobs.json
