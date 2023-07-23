@@ -4,9 +4,11 @@ import numpy as np
 
 # TODO milestones
 #     TODO Finish fitness function
+#         [x] Account for skills in calculations
+#         [ ] Account for traits in calculations
+#         [ ] Account for colonist value
 #     TODO Read colonist data from .rws save files
 #     TODO Retrieve .rws save files from game directory
-#     TODO Account for traits in calculations
 #     TODO Update .rws save file with optimized jobs **BE CAUTIOUS WITH THIS**
 
 
@@ -62,7 +64,9 @@ colonists = get_colony_data()['colonists']
 NUM_COLONISTS = len(colonists)
 NUM_JOBS = len(jobs)
 
-gene_space = list(range(5)) * NUM_JOBS * NUM_COLONISTS
+MAX_SKILL_LEVEL = 20
+
+gene_space = [list(range(5))] * NUM_JOBS * NUM_COLONISTS
 
 #################
 # END CONSTANTS #
@@ -75,8 +79,8 @@ gene_space = list(range(5)) * NUM_JOBS * NUM_COLONISTS
 #     1 - Highest priority
 #     4 - Lowest priority
 #     0 - Will not do
-def reshape_solution(solution):
-    return solution.reshape((NUM_COLONISTS,20))
+def reshape_solution(solution : np.array) -> np.array:
+    return solution.reshape((NUM_COLONISTS, NUM_JOBS))
 
 # This will calculate how proficient a colonist is at a job,
 # if they are even able to do said job.
@@ -84,10 +88,14 @@ def reshape_solution(solution):
 #   * Higher return value indicates a higher proficiency.
 #   * -1 indicates that the colonist is unable or unwilling to
 #     do the job
-def calculate_proficiency(colonist, job):
+def calculate_proficiency(colonist : dict, job : dict) -> np.int32:
 
     # Check if two lists contain any of the same elements
+    # Unnecessary now but might be used in the future when other
+    # factors are considered TODO <-
     def contain_same(list_1, list_2):
+        if list_1 == None or list_2 == None:
+            return False
         return len(set(list_1) & set(list_2)) > 0
     
     # Check if colonist is incapable of doing the job
@@ -95,41 +103,85 @@ def calculate_proficiency(colonist, job):
         return -1
     
     proficiency = 0
+    can_do = False # TODO ugly. find a better way to do this later
+    if job['skills'] == None:
+        return MAX_SKILL_LEVEL
     for skill in job['skills']:
+        
+        if skill == None:
+            proficiency += MAX_SKILL_LEVEL // 2
+            can_do = True
+            continue
         # Another check if colonist is incapable of doing the job.
         # Kind of have to do it this way because of how rimworld
-        # marks colonists as incapable
+        # marks colonists as incapable in two different ways...
         if colonist[skill] == None:
-            return -1
+            continue
+        can_do = True
         proficiency += colonist[skill]
-    return proficiency
+    return proficiency if can_do else -1
 
 # Calculate the fitness of a solution
 # TODO finish
-def fitness_function(ga_instance, solution, solution_idx):
+def fitness_function(ga_instance : pg.GA, solution : np.array, solution_idx : np.int64) -> float:
 
     solution_array = reshape_solution(solution)
     penalty = 0
     reward = 0
+    job_bias = [0] * NUM_JOBS
 
-    for colonist_idx, colonist_assignments in np.enumerate(solution_array):
+    for colonist_idx, colonist_assignments in enumerate(solution_array):
         colonist = colonists[colonist_idx]
-        for job_idx, job_priority in np.enumerate(colonist):
+        for job_idx, job_priority in enumerate(colonist_assignments):
             job = jobs[job_idx]
             proficiency = calculate_proficiency(colonist, job)
-            # TODO continue from here
+            if job_priority == 0:
+                # Penalize for not prioritizing jobs that a colonist has the skills for
+                if proficiency > -1:
+                    penalty += proficiency
+                # Reward for not assigning colonists to jobs they can't do
+                else:
+                    reward += 10
+            else:
+                # Penalize assigning colonists to jobs that they can't or just barely can do
+                if proficiency <= 3:
+                    penalty += 10
+                # Reward for assigning colonists to jobs they are capable of doing
+                else:
+                    reward += proficiency
+
     try:
         return reward / penalty
     except ZeroDivisionError:
-        return np.inf # **Probably** will never get here
+        return 10000 # **Probably** will never get here
 
-def print_results(ga_instance):
+def on_generation(ga_instance : pg.GA):
+    print(f'Generation {ga_instance.generations_completed} completed. Best fitness: {ga_instance.best_solution()[1]}')
+
+def print_results(ga_instance : pg.GA):
     solution, fitness, idx = ga_instance.best_solution()
-    for colonist_idx, colonist in solution:
-        pass # TODO fill
+
+    for colonist_idx, colonist_priorities in enumerate(reshape_solution(solution)):
+        print(f"Name:\n  {colonists[colonist_idx]['name']}")
+
+        # print stats
+        print("Stats:")
+        for k in colonists[colonist_idx].keys():
+            if k == 'name':
+                continue
+            print(f'  {k}: {colonists[colonist_idx][k]}')
+
+        # print job priorities
+        print("Job Priority:")
+        for job_idx, job in enumerate(jobs):
+            print(f"  {job['name']}: {colonist_priorities[job_idx]}")
+
+    print(f'Best Fitness: {fitness}')
+    ga_instance.plot_fitness()
+
 
 if __name__ == '__main__':
-    
+
     # TODO remove hard-coded values
     ga_instance = pg.GA(num_generations=1000,
                        num_parents_mating=20,
@@ -137,10 +189,13 @@ if __name__ == '__main__':
                        sol_per_pop=300,
                        num_genes=len(gene_space),
                        gene_type=int,
+                       gene_space=gene_space,
                        parent_selection_type='sss',
                        keep_parents=4,
                        crossover_type='scattered',
                        mutation_type='swap',
-                       mutation_percent_genes=10)
+                       mutation_percent_genes=10,
+                       on_generation=on_generation,
+                       stop_criteria='saturate_20')
     ga_instance.run()
     print_results(ga_instance)
